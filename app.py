@@ -144,6 +144,99 @@ def apply_binary_glitch_strict(img, glitch_amount=300, seed=42):
 
     return np.array(glitched_img)
 
+######
+
+
+def apply_dqt_glitch(img, dqt_amount=10, seed=42):
+    """
+    JPEGバイナリのDQT（量子化テーブル）部分をピンポイントにグリッチする
+    """
+    pil_img = Image.fromarray(img)
+    buffer = BytesIO()
+    pil_img.save(buffer, format="JPEG", quality=50)
+    jpeg_bytes = bytearray(buffer.getvalue())
+
+    rng = np.random.default_rng(seed)
+
+    # DQTマーカーを探す
+    dqt_marker = b'\xff\xdb'
+    dqt_indices = []
+    idx = 0
+    while True:
+        idx = jpeg_bytes.find(dqt_marker, idx)
+        if idx == -1:
+            break
+        dqt_indices.append(idx)
+        idx += 2  # 次を探す
+
+    if not dqt_indices:
+        return img  # 見つからない場合は何もしない
+
+    # DQTの直後のデータをいじる（長さはマーカー後2バイトで示される）
+    for dqt_start in dqt_indices:
+        length = int.from_bytes(jpeg_bytes[dqt_start+2:dqt_start+4], byteorder='big')
+        data_start = dqt_start + 4
+        data_end = data_start + length - 2  # 長さには2バイトのサイズ自身が含まれる
+
+        for _ in range(dqt_amount):
+            idx = rng.integers(data_start, data_end)
+            jpeg_bytes[idx] = rng.integers(0, 256)
+
+    try:
+        glitched_img = Image.open(BytesIO(jpeg_bytes)).convert("RGB")
+    except Exception:
+        return img
+
+    return np.array(glitched_img)
+
+
+
+
+
+def apply_dht_glitch(img, dht_amount=10, seed=42):
+    """
+    JPEGのDHT（ハフマンテーブル）セグメントをランダムに書き換える
+    """
+    pil_img = Image.fromarray(img)
+    buffer = BytesIO()
+    pil_img.save(buffer, format="JPEG", quality=50)
+    jpeg_bytes = bytearray(buffer.getvalue())
+
+    rng = np.random.default_rng(seed)
+
+    # DHTマーカーを探す
+    dht_marker = b'\xff\xc4'
+    dht_indices = []
+    idx = 0
+    while True:
+        idx = jpeg_bytes.find(dht_marker, idx)
+        if idx == -1:
+            break
+        dht_indices.append(idx)
+        idx += 2
+
+    if not dht_indices:
+        return img
+
+    # 各 DHT セグメント内を書き換え
+    for dht_start in dht_indices:
+        length = int.from_bytes(jpeg_bytes[dht_start+2:dht_start+4], byteorder='big')
+        data_start = dht_start + 4
+        data_end = data_start + length - 2  # header部含まれるため
+
+        if data_end > len(jpeg_bytes):
+            continue  # 破損を避ける
+
+        for _ in range(dht_amount):
+            idx = rng.integers(data_start, data_end)
+            jpeg_bytes[idx] = rng.integers(0, 256)
+
+    try:
+        glitched_img = Image.open(BytesIO(jpeg_bytes)).convert("RGB")
+    except Exception:
+        return img
+
+    return np.array(glitched_img)
 
 #############3
 #パラメーター関数の設定
@@ -197,7 +290,7 @@ def apply_binary_glitch_from_qiita_params():
     }
 
 def apply_binary_glitch_strict_params():
-    glitch_amount = st.slider("グリッチするバイト数", 0, 10000, 300)
+    glitch_amount = st.slider("グリッチするバイト数", 0, 1000, 45)
     seed = st.slider("乱数シード", 0, 10000, 42)
     return {
         "glitch_amount": glitch_amount,
@@ -205,6 +298,22 @@ def apply_binary_glitch_strict_params():
     }
 
 
+def apply_dqt_glitch_params():
+    dqt_amount = st.slider("DQTセグメントの改変バイト数", 0, 100, 10)
+    seed = st.slider("乱数シード", 0, 10000, 42)
+    return {
+        "dqt_amount": dqt_amount,
+        "seed": seed
+    }
+
+
+def apply_dht_glitch_params():
+    dht_amount = st.slider("DHTセグメントの改変バイト数", 0, 100, 10)
+    seed = st.slider("乱数シード", 0, 10000, 42)
+    return {
+        "dht_amount": dht_amount,
+        "seed": seed
+    }
 
 
 ######
@@ -220,7 +329,9 @@ GLITCH_FUNCTIONS = {
      "RGBずらし": apply_RGB_shift, 
      "ガウシアンノイズ": add_gaussian_noise,
      "JPEGバイナリグリッチ": apply_binary_glitch_from_qiita,  # ← 追加
-     "JPEGバイナリグリッチ試作２" :apply_binary_glitch_strict
+     "JPEGバイナリグリッチ試作２" :apply_binary_glitch_strict, 
+     "DQTバイナリグリッチ":apply_dqt_glitch, 
+     "DHTバイナリグリッチ":apply_dht_glitch
 }
 
 PARAM_FUNCTIONS = {
@@ -228,7 +339,9 @@ PARAM_FUNCTIONS = {
      "RGBずらし": apply_RGB_shift_params, 
      "ガウシアンノイズ": add_gaussian_noise_params, 
      "JPEGバイナリグリッチ": apply_binary_glitch_from_qiita_params,  # ← 追加
-     "JPEGバイナリグリッチ試作２" :apply_binary_glitch_strict_params
+     "JPEGバイナリグリッチ試作２" :apply_binary_glitch_strict_params, 
+     "DQTバイナリグリッチ":apply_dqt_glitch_params,  #https://qiita.com/clomie/items/d73f6c351f8fe56bba4f
+     "DHTバイナリグリッチ":apply_dht_glitch_params
 }
 
 #######
