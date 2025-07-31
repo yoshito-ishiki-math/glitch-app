@@ -62,10 +62,87 @@ def add_gaussian_noise(img,
     noisy += noise
     noisy = np.clip(noisy, 0, 255)  # 値を0〜255に制限
     return noisy.astype(np.uint8)
+######
 
 
 
+def apply_binary_glitch_from_qiita(img, glitch_amount=100):
+    """
+    JPEGの画像データ部分のみをバイナリレベルで書き換えるグリッチ関数
+    """
+    pil_img = Image.fromarray(img)
+    buffer = BytesIO()
+    pil_img.save(buffer, format="JPEG", quality=50)
+    jpeg_data = bytearray(buffer.getvalue())
 
+    # SOS (Start of Scan) を探す
+    sos_marker = b'\xff\xda'
+    eoi_marker = b'\xff\xd9'
+    sos_index = jpeg_data.find(sos_marker)
+    eoi_index = jpeg_data.find(eoi_marker)
+
+    if sos_index == -1 or eoi_index == -1:
+        return img  # マーカーが見つからなければスキップ
+
+    start = sos_index + 2  # SOSマーカーの直後から
+    end = eoi_index        # EOIの直前まで
+
+    # 書き換え対象部分のみランダムに改変
+    for _ in range(glitch_amount):
+        i = np.random.randint(start, end)
+        jpeg_data[i] = np.random.randint(0, 256)
+
+    # 書き換えたJPEGバイナリを読み込み
+    try:
+        glitched_img = Image.open(BytesIO(jpeg_data)).convert("RGB")
+    except Exception:
+        return img  # 壊れたら元画像を返す
+
+    return np.array(glitched_img)
+
+####
+
+
+def apply_binary_glitch_strict(img, glitch_amount=300, seed=42):
+    """
+    JPEGファイルの実イメージ部（FFDA〜FFD9の間）だけをシード付きでランダムに破壊する
+    """
+    # NumPy配列 → PIL画像に変換
+    pil_img = Image.fromarray(img)
+
+    # PIL → JPEGバイナリ化
+    buffer = BytesIO()
+    pil_img.save(buffer, format="JPEG", quality=50)
+    jpeg_bytes = bytearray(buffer.getvalue())
+
+    # SOS/EOIマーカー探索
+    sos = b'\xff\xda'
+    eoi = b'\xff\xd9'
+    sos_index = jpeg_bytes.find(sos)
+    eoi_index = jpeg_bytes.find(eoi)
+
+    if sos_index == -1 or eoi_index == -1 or sos_index > eoi_index:
+        return img  # エラー時は元画像
+
+    # ランダム生成器（シード付き）
+    rng = np.random.default_rng(seed)
+
+    # 実画像部の範囲（FFDA直後〜FFD9直前）
+    start = sos_index + 2
+    end = eoi_index
+
+    # glitch_amount 分ランダムに改変
+    for _ in range(glitch_amount):
+        idx = rng.integers(start, end)
+        jpeg_bytes[idx] = rng.integers(0, 256)
+
+    # 読み込みチャレンジ
+    try:
+        glitched_img = Image.open(BytesIO(jpeg_bytes)).convert("RGB")
+    except Exception:
+        return img
+
+    return np.array(glitched_img)
 
 
 #############3
@@ -113,6 +190,23 @@ def add_gaussian_noise_params():
     }
 
 
+def apply_binary_glitch_from_qiita_params():
+    glitch_amount = st.slider("書き換えるバイト数", 0, 10000, 300)
+    return {
+        "glitch_amount": glitch_amount
+    }
+
+def apply_binary_glitch_strict_params():
+    glitch_amount = st.slider("グリッチするバイト数", 0, 10000, 300)
+    seed = st.slider("乱数シード", 0, 10000, 42)
+    return {
+        "glitch_amount": glitch_amount,
+        "seed": seed
+    }
+
+
+
+
 ######
 ######
 
@@ -124,13 +218,17 @@ def add_gaussian_noise_params():
 GLITCH_FUNCTIONS = {
     "スキャンライン": add_scanline_glitch,
      "RGBずらし": apply_RGB_shift, 
-     "ガウシアンノイズ": add_gaussian_noise
+     "ガウシアンノイズ": add_gaussian_noise,
+     "JPEGバイナリグリッチ": apply_binary_glitch_from_qiita,  # ← 追加
+     "JPEGバイナリグリッチ試作２" :apply_binary_glitch_strict
 }
 
 PARAM_FUNCTIONS = {
     "スキャンライン": scanline_params,
      "RGBずらし": apply_RGB_shift_params, 
-     "ガウシアンノイズ": add_gaussian_noise_params
+     "ガウシアンノイズ": add_gaussian_noise_params, 
+     "JPEGバイナリグリッチ": apply_binary_glitch_from_qiita_params,  # ← 追加
+     "JPEGバイナリグリッチ試作２" :apply_binary_glitch_strict_params
 }
 
 #######
